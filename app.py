@@ -1,9 +1,10 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 from io import BytesIO
-import openpyxl
+from openpyxl import Workbook
+from openpyxl.utils import get_column_letter
 from datetime import datetime
-import math
 
 # 页面配置
 st.set_page_config(
@@ -34,56 +35,6 @@ PLATFORM_CONFIG = {
     }
 }
 
-# ==================== 字段名映射配置 ====================
-FIELD_MAPPING = {
-    '小红书_结算': {
-        '结算时间': ['结算时间', '结算日期'],
-        '商品实付/实退': ['商品实付/实退', '商品实付实退', '实付金额', '实退金额'],
-        '佣金总额': ['佣金总额', '佣金', '总佣金'],
-        '售后单号': ['售后单号', '退款单号', '售后订单号'],
-        '订单号': ['订单号', '订单编号'],
-        '规格ID': ['规格ID', '规格id', 'SKU ID', 'sku_id'],
-        'SKU件数': ['SKU件数', 'SKU 件数', 'sku件数', '件数', '数量', '商品数量'],
-        '运费': ['运费', '邮费', '配送费'],
-        '商品名称': ['商品名称', '商品', '产品名称'],
-        '规格名称': ['规格名称', '规格', 'SKU名称']
-    },
-    '小红书_订单': {
-        '商家编码': ['商家编码', '商品编码', '平台SKU编码', 'SKU编码'],
-        '商品总价(元)': ['商品总价(元)', '商品总价', '总价'],
-        'SKU件数': ['SKU件数', 'SKU 件数', 'sku件数', '件数', '数量'],
-        '下单时间': ['下单时间', '下单日期', '订单时间'],
-        '订单号': ['订单号', '订单编号'],
-        '规格ID': ['规格ID', '规格id', 'SKU ID', 'sku_id']
-    }
-}
-
-def normalize_field_names(df, mapping_dict):
-    """
-    标准化字段名称
-    
-    Args:
-        df: DataFrame
-        mapping_dict: 字段映射字典
-    
-    Returns:
-        DataFrame with normalized column names
-    """
-    column_mapping = {}
-    
-    for standard_name, possible_names in mapping_dict.items():
-        for col in df.columns:
-            # 去除空格后比较
-            col_stripped = col.strip()
-            if col_stripped in possible_names:
-                column_mapping[col] = standard_name
-                break
-    
-    if column_mapping:
-        df = df.rename(columns=column_mapping)
-    
-    return df
-
 # ==================== 密码保护 ====================
 def check_password():
     """简单的密码保护"""
@@ -99,494 +50,458 @@ def check_password():
         col1, col2, col3 = st.columns([1, 1, 2])
         with col1:
             if st.button("登录", use_container_width=True):
-                if password == "ecommerce2025":  # 默认密码，可以修改
+                if password == "ecommerce2025":
                     st.session_state.authenticated = True
                     st.rerun()
                 else:
-                    st.error("密码错误，请重试")
+                    st.error("❌ 密码错误")
         
-        st.info("💡 提示：如果忘记密码，请联系系统管理员")
+        with col2:
+            st.markdown("*忘记密码？请联系管理员*")
+        
         return False
     
     return True
 
-if not check_password():
-    st.stop()
-
-# ==================== 小红书处理函数 ====================
-
-def identify_xiaohongshu_files(uploaded_files):
-    """识别小红书的主数据源和辅助数据源"""
-    settlement_markers = ['结算时间', '商品实付/实退', '佣金总额', '售后单号']
-    orders_markers = ['商家编码', '商品总价(元)', 'SKU件数', '下单时间']
-    
-    result = {}
+# ==================== 文件识别 ====================
+def identify_files(uploaded_files):
+    """识别上传的文件类型"""
+    result = {
+        'settlement': None,
+        'orders': None,
+        'settlement_name': None,
+        'orders_name': None
+    }
     
     for uploaded_file in uploaded_files:
         try:
-            # 重置文件指针
             uploaded_file.seek(0)
-            df = pd.read_excel(uploaded_file, nrows=0)
-            columns = [col.strip() for col in df.columns.tolist()]  # 去除空格
+            df = pd.read_excel(uploaded_file, nrows=5)
+            columns = set(df.columns)
             
-            # 检查结算明细特征
-            settlement_match = 0
-            for marker in settlement_markers:
-                # 检查是否有任何可能的字段名匹配
-                if marker in FIELD_MAPPING['小红书_结算']:
-                    possible_names = FIELD_MAPPING['小红书_结算'][marker]
-                    if any(name in columns for name in possible_names):
-                        settlement_match += 1
-                elif marker in columns:
-                    settlement_match += 1
-            
-            # 检查订单数据特征
-            orders_match = 0
-            for marker in orders_markers:
-                if marker in FIELD_MAPPING['小红书_订单']:
-                    possible_names = FIELD_MAPPING['小红书_订单'][marker]
-                    if any(name in columns for name in possible_names):
-                        orders_match += 1
-                elif marker in columns:
-                    orders_match += 1
-            
-            # 重置文件指针以便后续读取
-            uploaded_file.seek(0)
-            
-            if settlement_match >= 3:
+            # 识别结算明细（关键字段：结算时间、佣金总额、商品实付/实退）
+            if '结算时间' in columns and '佣金总额' in columns and '商品实付/实退' in columns:
                 result['settlement'] = uploaded_file
                 result['settlement_name'] = uploaded_file.name
-                result['settlement_columns'] = columns
-            elif orders_match >= 3:
+            # 识别订单数据（关键字段：商家编码、商品总价(元)、SKU件数）
+            elif '商家编码' in columns and '商品总价(元)' in columns and 'SKU件数' in columns:
                 result['orders'] = uploaded_file
                 result['orders_name'] = uploaded_file.name
-                result['orders_columns'] = columns
+            
+            uploaded_file.seek(0)
                 
         except Exception as e:
             st.warning(f"⚠️ 无法读取文件 {uploaded_file.name}: {e}")
     
     return result
 
+# ==================== 小红书数据处理（完整版）====================
 def process_xiaohongshu_data(settlement_file, orders_file, year, month):
-    """处理小红书数据"""
+    """处理小红书数据 - 完整版本，包含所有计算和Excel公式"""
     
     # 读取数据
     settlement_file.seek(0)
     orders_file.seek(0)
     
-    df_settlement = pd.read_excel(settlement_file)
-    df_orders = pd.read_excel(orders_file)
+    xhs_settlement = pd.read_excel(settlement_file)
+    xhs_orders = pd.read_excel(orders_file)
     
-    # 标准化字段名
-    df_settlement = normalize_field_names(df_settlement, FIELD_MAPPING['小红书_结算'])
-    df_orders = normalize_field_names(df_orders, FIELD_MAPPING['小红书_订单'])
+    # 创建订单查找字典
+    order_lookup = {}
+    for _, row in xhs_orders.iterrows():
+        key = f"{row['订单号']}_{row['规格ID']}"
+        order_lookup[key] = {
+            '商家编码': row.get('商家编码', ''),
+            '商品总价(元)': row.get('商品总价(元)', 0),
+            'SKU件数': row.get('SKU件数', 1)
+        }
     
-    # 验证必需字段
-    required_settlement_fields = ['结算时间', '商品实付/实退', '佣金总额', '订单号', '规格ID', 'SKU件数', '运费']
-    required_orders_fields = ['商家编码', '订单号', '规格ID']
+    # 保持原始顺序
+    xhs_dec = xhs_settlement.copy()
+    xhs_dec['_original_index'] = range(len(xhs_dec))
     
-    missing_settlement = [f for f in required_settlement_fields if f not in df_settlement.columns]
-    missing_orders = [f for f in required_orders_fields if f not in df_orders.columns]
+    # 计算订单行数和订单序位
+    xhs_dec['订单行数'] = xhs_dec.groupby('订单号')['订单号'].transform('count')
+    xhs_dec['订单序位'] = xhs_dec.groupby('订单号').cumcount() + 1
     
-    if missing_settlement:
-        raise ValueError(f"结算明细文件缺少必需字段: {', '.join(missing_settlement)}\n当前字段: {', '.join(df_settlement.columns.tolist())}")
+    # 创建查找键
+    xhs_dec['lookup_key'] = xhs_dec['订单号'].astype(str) + '_' + xhs_dec['规格ID'].astype(str)
     
-    if missing_orders:
-        raise ValueError(f"订单数据文件缺少必需字段: {', '.join(missing_orders)}\n当前字段: {', '.join(df_orders.columns.tolist())}")
+    # 查找平台商品编码
+    def get_merchant_code(row):
+        lookup_key = row['lookup_key']
+        if lookup_key in order_lookup:
+            return order_lookup[lookup_key]['商家编码']
+        return ''
     
-    # 过滤指定月份的数据
-    df_settlement['结算时间'] = pd.to_datetime(df_settlement['结算时间'])
-    df_settlement = df_settlement[
-        (df_settlement['结算时间'].dt.year == year) & 
-        (df_settlement['结算时间'].dt.month == month)
-    ].copy()
+    xhs_dec['平台商品编码'] = xhs_dec.apply(get_merchant_code, axis=1)
     
-    if len(df_settlement) == 0:
-        raise ValueError(f"未找到 {year}年{month}月 的结算数据，请检查数据文件")
+    # 商品编码：提取平台商品编码中"-"之前的部分
+    def extract_product_code(code):
+        if pd.isna(code) or code == '':
+            return ''
+        code_str = str(code)
+        if '-' in code_str:
+            return code_str.split('-')[0]
+        return code_str
     
-    # 创建订单数据的查找字典
-    df_orders['lookup_key'] = df_orders['订单号'].astype(str) + '_' + df_orders['规格ID'].astype(str)
-    orders_dict = df_orders.set_index('lookup_key')['商家编码'].to_dict()
+    xhs_dec['商品编码'] = xhs_dec['平台商品编码'].apply(extract_product_code)
     
-    # 创建结果DataFrame
-    result = pd.DataFrame()
+    # 辅助函数：转换金额
+    def to_float(x):
+        if pd.isna(x):
+            return 0.0
+        if isinstance(x, str):
+            x = x.replace('¥', '').replace(',', '').strip()
+            if x == '':
+                return 0.0
+        return float(x)
     
-    # A列：平台SKU编码（从订单数据查找）
-    df_settlement['lookup_key'] = df_settlement['订单号'].astype(str) + '_' + df_settlement['规格ID'].astype(str)
-    result['平台SKU编码'] = df_settlement['lookup_key'].map(orders_dict)
-    
-    # B列：销售数量（复杂逻辑，计算后填入值）
-    sales_qty = []
-    for _, row in df_settlement.iterrows():
-        sku_count = row['SKU件数']
-        paid_amount = row['商品实付/实退']
+    # 计算销售数量
+    def calc_sales_qty(row):
+        lookup_key = row['lookup_key']
+        if lookup_key not in order_lookup:
+            return 0
         
-        if paid_amount < 0:
-            if abs(paid_amount) <= 0.15:
-                sales_qty.append(0)
-            else:
-                sales_qty.append(-abs(sku_count))
-        else:
-            sales_qty.append(math.ceil(sku_count))
-    
-    result['销售数量'] = sales_qty
-    
-    # C列：运费（复杂逻辑，计算后填入值）
-    shipping_fees = []
-    grouped = df_settlement.groupby('订单号')
-    
-    for order_num, group in grouped:
-        order_shipping = group['运费'].iloc[0]
-        paid_amounts = group['商品实付/实退'].values
+        info = order_lookup[lookup_key]
+        total_price = to_float(info['商品总价(元)'])
+        sku_count = to_float(info['SKU件数'])
         
-        # 判断是否全部为负数（退货订单）
-        if all(amt < 0 for amt in paid_amounts):
-            for _ in range(len(group)):
-                shipping_fees.append(order_shipping)
+        if sku_count == 0 or total_price == 0:
+            return 0
+        
+        unit_price = total_price / sku_count
+        
+        actual_amount = (
+            to_float(row.get('商品实付/实退', 0)) +
+            to_float(row.get('商家优惠', 0)) +
+            to_float(row.get('平台优惠补贴', 0))
+        )
+        
+        if unit_price == 0:
+            return 0
+        
+        ratio = actual_amount / unit_price
+        
+        if abs(ratio) < 0.15:
+            return 0
         else:
-            positive_items = sum(1 for amt in paid_amounts if amt > 0)
-            if positive_items > 0:
-                fee_per_item = order_shipping / positive_items
-                for amt in paid_amounts:
-                    if amt > 0:
-                        shipping_fees.append(fee_per_item)
-                    else:
-                        shipping_fees.append(0)
+            if ratio > 0:
+                return int(np.ceil(ratio))
             else:
-                for _ in range(len(group)):
-                    shipping_fees.append(0)
+                return int(np.floor(ratio))
     
-    result['运费'] = shipping_fees
+    xhs_dec['销售数量'] = xhs_dec.apply(calc_sales_qty, axis=1)
     
-    # D-O列：使用Excel公式
-    result['订单号'] = None  # 将填入公式
-    result['订单计数'] = None  # 将填入公式
-    result['订单序号'] = None  # 将填入公式
-    result['应收客户'] = None  # 将填入公式
-    result['应到账金额'] = None  # 将填入公式
+    # 计算应收客户
+    xhs_dec['应收客户'] = xhs_dec['商品实付/实退'].apply(to_float)
     
-    # P-Z列：原始数据字段
-    result['订单号_值'] = df_settlement['订单号'].values
-    result['结算时间'] = df_settlement['结算时间'].values
-    result['商品名称'] = df_settlement['商品名称'].values if '商品名称' in df_settlement.columns else ''
-    result['规格名称'] = df_settlement['规格名称'].values if '规格名称' in df_settlement.columns else ''
-    result['规格ID'] = df_settlement['规格ID'].values
-    result['SKU件数'] = df_settlement['SKU件数'].values
-    result['商品实付/实退'] = df_settlement['商品实付/实退'].values
-    result['运费_原始'] = df_settlement['运费'].values
-    result['佣金总额'] = df_settlement['佣金总额'].values
-    result['售后单号'] = df_settlement['售后单号'].values if '售后单号' in df_settlement.columns else ''
+    # 计算应收平台
+    xhs_dec['应收平台'] = xhs_dec['平台优惠补贴'].apply(to_float)
     
-    return result
-
-def write_xiaohongshu_to_excel(df):
-    """将小红书DataFrame写入Excel，并为特定列添加公式"""
+    # 计算收：价外收费
+    xhs_dec['运费_数值'] = xhs_dec['运费'].apply(to_float)
     
-    wb = openpyxl.Workbook()
+    # 计算每个订单中销售数量>0的行数
+    positive_counts = xhs_dec[xhs_dec['销售数量'] > 0].groupby('订单号').size()
+    xhs_dec['销售数量>0的行数'] = xhs_dec['订单号'].map(positive_counts).fillna(0)
+    
+    def calc_freight_fee(row):
+        sales_qty = row['销售数量']
+        freight = row['运费_数值']
+        
+        if sales_qty < 0:
+            return freight
+        elif sales_qty > 0:
+            positive_count = row['销售数量>0的行数']
+            if positive_count > 0:
+                return freight / positive_count
+            else:
+                return 0
+        else:
+            return 0
+    
+    xhs_dec['收：价外收费'] = xhs_dec.apply(calc_freight_fee, axis=1)
+    
+    # 扣：平台佣金用（取负值）
+    xhs_dec['扣：平台佣金用'] = -xhs_dec['佣金总额'].apply(to_float)
+    
+    # 扣：分销佣金（取负值）
+    xhs_dec['扣：分销佣金'] = -xhs_dec['分销佣金'].apply(to_float)
+    
+    # 扣其它费用
+    xhs_dec['扣其它费用'] = 0
+    
+    # 应到账金额
+    xhs_dec['应到账金额'] = (
+        xhs_dec['应收客户'] + 
+        xhs_dec['应收平台'] + 
+        xhs_dec['收：价外收费'] - 
+        xhs_dec['扣：平台佣金用'] - 
+        xhs_dec['扣：分销佣金'] - 
+        xhs_dec['扣其它费用']
+    )
+    
+    # ============================================================
+    # 创建Excel文件（带公式）
+    # ============================================================
+    wb = Workbook()
     ws = wb.active
-    ws.title = "小红书结算明细"
+    ws.title = '小红书-结算账单'
     
-    # 写入表头
-    headers = [
-        '平台SKU编码', '销售数量', '运费', '订单号', '订单计数', '订单序号',
-        '应收客户', '应到账金额', '订单号_原始', '结算时间', '商品名称',
-        '规格名称', '规格ID', 'SKU件数', '商品实付/实退', '运费_原始',
-        '佣金总额', '售后单号'
+    # 定义计算字段列（A-O列）
+    calc_columns = ['年', '月', '订单号', '订单行数', '订单序位', '平台商品编码', '商品编码', 
+                    '销售数量', '应收客户', '应收平台', '收：价外收费', '扣：平台佣金用', 
+                    '扣：分销佣金', '扣其它费用', '应到账金额']
+    
+    # 原始数据列（Q-BD列，P列为空）
+    raw_data_columns = [
+        '订单号', '售后单号', '下单时间', '完成时间', '结算时间', '交易类型', '结算账户', '动账金额',
+        '商品名称', '类目', 'SKU条码', '规格ID', '商品数量', '计佣基数', '商品实付/实退', '优惠类型',
+        '商家优惠', '平台优惠补贴', '平台运费补贴', '佣金率', '返利率', '佣金总额', '计税价格(含税)',
+        '计税价格(未税)', '税率', '跨境税代缴', '商品税金', '卖家CPS佣金率', '分销佣金',
+        '推广达人ID', '达人昵称', '带货类型', '代运营服务商佣金', '代开发服务商佣金',
+        '运费', '运费税金', '支付渠道费', '花呗分期手续费', '国补订单毛保金额', '备注'
     ]
-    ws.append(headers)
     
-    # 写入数据和公式
-    for idx, row in df.iterrows():
-        row_num = idx + 2  # Excel行号（从2开始）
+    # 写入表头（第2行）
+    for col_idx, col_name in enumerate(calc_columns, 1):
+        ws.cell(row=2, column=col_idx, value=col_name)
+    
+    # P列（第16列）为空
+    ws.cell(row=2, column=16, value='')
+    
+    # 原始数据表头（从Q列=第17列开始）
+    for col_idx, col_name in enumerate(raw_data_columns, 17):
+        ws.cell(row=2, column=col_idx, value=col_name)
+    
+    # 写入数据（从第3行开始）
+    for row_idx, (_, row) in enumerate(xhs_dec.iterrows(), 3):
+        # A列：年
+        ws.cell(row=row_idx, column=1, value=year)
         
-        # A-C列：直接值
-        ws.cell(row=row_num, column=1, value=row['平台SKU编码'])
-        ws.cell(row=row_num, column=2, value=row['销售数量'])
-        ws.cell(row=row_num, column=3, value=row['运费'])
+        # B列：月
+        ws.cell(row=row_idx, column=2, value=month)
         
-        # D列：订单号（公式：=I{row_num}）
-        ws.cell(row=row_num, column=4, value=f"=I{row_num}")
+        # C列：订单号（引用Q列）
+        ws.cell(row=row_idx, column=3, value=f'=Q{row_idx}')
         
-        # E列：订单计数（公式：=COUNTIF($D$2:$D${last_row},D{row_num})）
-        last_row = len(df) + 1
-        ws.cell(row=row_num, column=5, value=f"=COUNTIF($D$2:$D${last_row},D{row_num})")
+        # D列：订单行数（公式：COUNTIF(Q:Q,Q{row})）
+        ws.cell(row=row_idx, column=4, value=f'=COUNTIF(Q:Q,Q{row_idx})')
         
-        # F列：订单序号（公式：=COUNTIF($D$2:$D{row_num},D{row_num})）
-        ws.cell(row=row_num, column=6, value=f"=COUNTIF($D$2:$D{row_num},D{row_num})")
+        # E列：订单序位（公式：COUNTIF($Q$3:Q{row},Q{row})）
+        ws.cell(row=row_idx, column=5, value=f'=COUNTIF($Q$3:Q{row_idx},Q{row_idx})')
         
-        # G列：应收客户（公式：=O{row_num}+P{row_num}+C{row_num}）
-        ws.cell(row=row_num, column=7, value=f"=O{row_num}+P{row_num}+C{row_num}")
+        # F列：平台商品编码（值）
+        ws.cell(row=row_idx, column=6, value=row['平台商品编码'])
         
-        # H列：应到账金额（公式：=G{row_num}-Q{row_num}）
-        ws.cell(row=row_num, column=8, value=f"=G{row_num}-Q{row_num}")
+        # G列：商品编码（公式）
+        ws.cell(row=row_idx, column=7, value=f'=IFERROR(LEFT(F{row_idx},FIND("-",F{row_idx})-1),F{row_idx})')
         
-        # I-R列：原始数据
-        ws.cell(row=row_num, column=9, value=row['订单号_值'])
-        ws.cell(row=row_num, column=10, value=row['结算时间'])
-        ws.cell(row=row_num, column=11, value=row['商品名称'])
-        ws.cell(row=row_num, column=12, value=row['规格名称'])
-        ws.cell(row=row_num, column=13, value=row['规格ID'])
-        ws.cell(row=row_num, column=14, value=row['SKU件数'])
-        ws.cell(row=row_num, column=15, value=row['商品实付/实退'])
-        ws.cell(row=row_num, column=16, value=row['运费_原始'])
-        ws.cell(row=row_num, column=17, value=row['佣金总额'])
-        ws.cell(row=row_num, column=18, value=row['售后单号'])
+        # H列：销售数量（值）
+        ws.cell(row=row_idx, column=8, value=row['销售数量'])
+        
+        # I列：应收客户（公式：AE{row}）
+        ws.cell(row=row_idx, column=9, value=f'=AE{row_idx}')
+        
+        # J列：应收平台（公式：AH{row}）
+        ws.cell(row=row_idx, column=10, value=f'=AH{row_idx}')
+        
+        # K列：收：价外收费（值）
+        ws.cell(row=row_idx, column=11, value=row['收：价外收费'])
+        
+        # L列：扣：平台佣金用（公式：-AL{row}）
+        ws.cell(row=row_idx, column=12, value=f'=-AL{row_idx}')
+        
+        # M列：扣：分销佣金（公式：-AS{row}）
+        ws.cell(row=row_idx, column=13, value=f'=-AS{row_idx}')
+        
+        # N列：扣其它费用
+        ws.cell(row=row_idx, column=14, value=0)
+        
+        # O列：应到账金额（公式）
+        ws.cell(row=row_idx, column=15, value=f'=I{row_idx}+J{row_idx}+K{row_idx}-L{row_idx}-M{row_idx}-N{row_idx}')
+        
+        # P列：空
+        ws.cell(row=row_idx, column=16, value='')
+        
+        # 原始数据列（从Q列开始）
+        for col_offset, col_name in enumerate(raw_data_columns):
+            col_idx = 17 + col_offset
+            if col_name in xhs_settlement.columns:
+                value = row.get(col_name, '')
+                if isinstance(value, str) and value.startswith('='):
+                    value = "'" + value
+                ws.cell(row=row_idx, column=col_idx, value=value)
+            elif col_name == '推广达人ID':
+                for c in xhs_settlement.columns:
+                    if '达人ID' in c:
+                        value = row.get(c, '')
+                        ws.cell(row=row_idx, column=col_idx, value=value)
+                        break
+                else:
+                    ws.cell(row=row_idx, column=col_idx, value='')
+            else:
+                ws.cell(row=row_idx, column=col_idx, value='')
     
     # 保存到BytesIO
     output = BytesIO()
     wb.save(output)
     output.seek(0)
     
-    return output
-
-# ==================== 抖音处理函数（预留接口）====================
-
-def identify_douyin_files(uploaded_files):
-    """识别抖音数据文件（待实现）"""
-    st.warning("⚠️ 抖音数据处理功能正在开发中...")
-    return {}
-
-def process_douyin_data(files, year, month):
-    """处理抖音数据（待实现）"""
-    raise NotImplementedError("抖音数据处理功能正在开发中")
-
-def write_douyin_to_excel(df):
-    """将抖音数据写入Excel（待实现）"""
-    raise NotImplementedError("抖音Excel生成功能正在开发中")
-
-# ==================== 视频号处理函数（预留接口）====================
-
-def identify_shipinhao_files(uploaded_files):
-    """识别视频号数据文件（待实现）"""
-    st.warning("⚠️ 视频号数据处理功能正在开发中...")
-    return {}
-
-def process_shipinhao_data(files, year, month):
-    """处理视频号数据（待实现）"""
-    raise NotImplementedError("视频号数据处理功能正在开发中")
-
-def write_shipinhao_to_excel(df):
-    """将视频号数据写入Excel（待实现）"""
-    raise NotImplementedError("视频号Excel生成功能正在开发中")
-
-# ==================== 统一处理接口 ====================
-
-def process_platform_data(platform, uploaded_files, year, month):
-    """
-    统一的平台数据处理接口
+    # 统计信息
+    stats = {
+        '总记录数': len(xhs_dec),
+        '订单数': xhs_dec['订单号'].nunique(),
+        '销售数量合计': xhs_dec['销售数量'].sum(),
+        '应收客户合计': xhs_dec['应收客户'].sum(),
+        '应到账金额合计': xhs_dec['应到账金额'].sum()
+    }
     
-    Args:
-        platform: 平台名称（'小红书', '抖音', '视频号'）
-        uploaded_files: 上传的文件列表
-        year: 处理年份
-        month: 处理月份
-    
-    Returns:
-        BytesIO: 生成的Excel文件
-    """
-    
-    if platform == '小红书':
-        # 识别文件
-        files = identify_xiaohongshu_files(uploaded_files)
-        
-        if 'settlement' not in files or 'orders' not in files:
-            error_msg = "文件识别失败！\n\n"
-            if 'settlement' not in files:
-                error_msg += "❌ 未找到结算明细文件\n"
-            if 'orders' not in files:
-                error_msg += "❌ 未找到订单数据文件\n"
-            error_msg += "\n请确保上传的文件包含正确的字段。"
-            raise ValueError(error_msg)
-        
-        # 处理数据
-        result_df = process_xiaohongshu_data(files['settlement'], files['orders'], year, month)
-        
-        # 生成Excel
-        output = write_xiaohongshu_to_excel(result_df)
-        
-        return output, result_df, files
-    
-    elif platform == '抖音':
-        files = identify_douyin_files(uploaded_files)
-        result_df = process_douyin_data(files, year, month)
-        output = write_douyin_to_excel(result_df)
-        return output, result_df, files
-    
-    elif platform == '视频号':
-        files = identify_shipinhao_files(uploaded_files)
-        result_df = process_shipinhao_data(files, year, month)
-        output = write_shipinhao_to_excel(result_df)
-        return output, result_df, files
-    
-    else:
-        raise ValueError(f"不支持的平台: {platform}")
+    return output, xhs_dec, stats
 
-# ==================== Streamlit界面 ====================
+# ==================== 抖音数据处理（待实现）====================
+def process_douyin_data(file1, file2, year, month):
+    """处理抖音数据 - 待实现"""
+    raise NotImplementedError("抖音数据处理功能开发中...")
 
-st.title("📊 电商数据处理系统")
-st.markdown("---")
+# ==================== 视频号数据处理（待实现）====================
+def process_shipinhao_data(file1, file2, year, month):
+    """处理视频号数据 - 待实现"""
+    raise NotImplementedError("视频号数据处理功能开发中...")
 
-# 侧边栏
-with st.sidebar:
-    st.header("⚙️ 系统设置")
+# ==================== 主程序 ====================
+def main():
+    if not check_password():
+        return
     
-    # 显示平台状态
-    st.subheader("支持的平台")
-    for platform, config in PLATFORM_CONFIG.items():
-        if config['enabled']:
-            st.success(f"{config['icon']} {platform} - {config['status']}")
-        else:
-            st.info(f"{config['icon']} {platform} - {config['status']}")
-    
+    # 标题
+    st.title("📊 电商数据处理系统")
     st.markdown("---")
     
-    # 选择平台
-    st.subheader("选择平台")
-    enabled_platforms = [p for p, c in PLATFORM_CONFIG.items() if c['enabled']]
-    selected_platform = st.selectbox(
-        "当前处理平台",
-        enabled_platforms,
-        help="选择要处理的电商平台"
+    # 侧边栏：系统设置
+    with st.sidebar:
+        st.header("⚙️ 系统设置")
+        
+        st.subheader("支持的平台")
+        for platform, config in PLATFORM_CONFIG.items():
+            status_text = f"{config['icon']} **{platform}** - {config['status']}"
+            if config['enabled']:
+                st.success(status_text)
+            else:
+                st.info(status_text)
+        
+        st.markdown("---")
+        
+        # 选择平台
+        st.subheader("选择平台")
+        enabled_platforms = [p for p, c in PLATFORM_CONFIG.items() if c['enabled']]
+        selected_platform = st.selectbox(
+            "当前处理平台",
+            enabled_platforms,
+            help="选择要处理数据的平台"
+        )
+        
+        # 选择月份
+        st.subheader("处理月份")
+        year = st.number_input("年份", min_value=2020, max_value=2030, value=2025)
+        month = st.number_input("月份", min_value=1, max_value=12, value=12)
+        
+        st.markdown("---")
+        
+        # 退出登录
+        if st.button("🚪 退出登录", use_container_width=True):
+            st.session_state.authenticated = False
+            st.rerun()
+    
+    # 主界面
+    st.header(f"🚀 步骤1：上传数据文件")
+    st.markdown(f"当前平台：**{PLATFORM_CONFIG[selected_platform]['icon']} {selected_platform}**")
+    
+    uploaded_files = st.file_uploader(
+        "请上传2个Excel文件（结算明细 + 订单数据）",
+        type=['xlsx', 'xls'],
+        accept_multiple_files=True,
+        help="系统会自动识别文件类型"
     )
     
-    # 选择处理月份
-    st.subheader("处理月份")
-    year = st.number_input("年份", min_value=2020, max_value=2030, value=2025)
-    month = st.number_input("月份", min_value=1, max_value=12, value=12)
-    
-    st.markdown("---")
-    
-    # 退出登录
-    if st.button("🚪 退出登录"):
-        st.session_state.authenticated = False
-        st.rerun()
-
-# 主界面
-st.header(f"📁 步骤1：上传 {PLATFORM_CONFIG[selected_platform]['icon']} {selected_platform} 数据文件")
-
-# 根据平台显示不同的提示
-if selected_platform == '小红书':
-    st.markdown("请上传小红书的**结算明细**和**订单数据**两个Excel文件")
-elif selected_platform == '抖音':
-    st.markdown("请上传抖音的**结算账单**和**订单数据**文件")
-elif selected_platform == '视频号':
-    st.markdown("请上传视频号的**订单流水**、**资金流水**和**订单数据**文件")
-
-uploaded_files = st.file_uploader(
-    "支持 .xlsx 和 .csv 格式",
-    accept_multiple_files=True,
-    type=['xlsx', 'csv'],
-    help=f"上传{selected_platform}的数据文件"
-)
-
-if uploaded_files:
-    st.success(f"✅ 已上传 {len(uploaded_files)} 个文件")
-    
-    # 显示文件列表
-    for file in uploaded_files:
-        st.text(f"  📄 {file.name}")
-    
-    st.markdown("---")
-    st.header("🚀 步骤2：开始处理")
-    
-    if st.button("开始处理数据", type="primary", use_container_width=True):
+    if uploaded_files and len(uploaded_files) >= 2:
+        # 识别文件
+        files = identify_files(uploaded_files)
         
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        try:
-            # 处理数据
-            status_text.text("⏳ 正在识别文件类型...")
-            progress_bar.progress(10)
+        if files['settlement'] and files['orders']:
+            st.success(f"✅ 已上传 {len(uploaded_files)} 个文件")
             
-            status_text.text("⏳ 正在读取数据...")
-            progress_bar.progress(30)
-            
-            output, result_df, files = process_platform_data(
-                selected_platform,
-                uploaded_files,
-                year,
-                month
-            )
-            
-            status_text.text("⏳ 正在计算字段...")
-            progress_bar.progress(70)
-            
-            status_text.text("⏳ 正在生成Excel文件...")
-            progress_bar.progress(90)
-            
-            progress_bar.progress(100)
-            status_text.text("✅ 处理完成！")
-            
-            st.success("🎉 数据处理成功！")
-            
-            st.markdown("---")
-            st.header("📈 步骤3：查看结果")
-            
-            # 显示识别的文件信息
-            if selected_platform == '小红书':
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.info(f"📊 结算明细：{files['settlement_name']}")
-                    with st.expander("查看字段列表"):
-                        st.text("\n".join(files['settlement_columns']))
-                with col2:
-                    st.info(f"📦 订单数据：{files['orders_name']}")
-                    with st.expander("查看字段列表"):
-                        st.text("\n".join(files['orders_columns']))
-            
-            # 统计信息
-            col1, col2, col3 = st.columns(3)
-            
+            col1, col2 = st.columns(2)
             with col1:
-                st.metric("总记录数", f"{len(result_df):,}")
-            
+                st.info(f"📄 **结算明细**: {files['settlement_name']}")
             with col2:
-                unique_orders = result_df['订单号_值'].nunique()
-                st.metric("订单数", f"{unique_orders:,}")
+                st.info(f"📄 **订单数据**: {files['orders_name']}")
             
-            with col3:
-                total_amount = result_df['商品实付/实退'].sum() + result_df['运费'].sum()
-                st.metric("应收客户总额", f"¥{total_amount:,.2f}")
-            
-            # 数据预览
-            st.subheader("📋 数据预览（前20行）")
-            preview_df = result_df[['平台SKU编码', '销售数量', '运费', '订单号_值', '商品名称', '商品实付/实退']].head(20)
-            st.dataframe(preview_df, use_container_width=True)
-            
+            # 处理数据
             st.markdown("---")
-            st.header("💾 步骤4：下载结果")
+            st.header("🚀 步骤2：开始处理")
             
-            # 下载按钮
-            st.download_button(
-                label="📥 下载Excel文件",
-                data=output,
-                file_name=f"{selected_platform}_{year}年{month}月结算账单.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
-            
-            st.info("💡 提示：下载的Excel文件中包含公式，可以直接在Excel中查看和编辑")
-            
-        except NotImplementedError as e:
-            st.warning(f"⚠️ {str(e)}")
-            st.info("💡 该平台的处理功能正在开发中，敬请期待！")
-            
-        except Exception as e:
-            st.error(f"❌ 处理失败：{str(e)}")
-            with st.expander("查看详细错误信息"):
-                st.exception(e)
+            if st.button("开始处理数据", type="primary", use_container_width=True):
+                with st.spinner("⏳ 正在读取数据..."):
+                    try:
+                        processor_name = PLATFORM_CONFIG[selected_platform]['processor']
+                        
+                        if processor_name == 'process_xiaohongshu':
+                            output, result_df, stats = process_xiaohongshu_data(
+                                files['settlement'],
+                                files['orders'],
+                                year,
+                                month
+                            )
+                        elif processor_name == 'process_douyin':
+                            output, result_df, stats = process_douyin_data(
+                                files['settlement'],
+                                files['orders'],
+                                year,
+                                month
+                            )
+                        elif processor_name == 'process_shipinhao':
+                            output, result_df, stats = process_shipinhao_data(
+                                files['settlement'],
+                                files['orders'],
+                                year,
+                                month
+                            )
+                        
+                        st.success("✅ 处理完成！")
+                        
+                        # 显示统计信息
+                        st.subheader("📊 数据统计")
+                        cols = st.columns(len(stats))
+                        for col, (key, value) in zip(cols, stats.items()):
+                            with col:
+                                if isinstance(value, (int, float)):
+                                    st.metric(key, f"{value:,.2f}" if isinstance(value, float) else f"{value:,}")
+                                else:
+                                    st.metric(key, value)
+                        
+                        # 下载按钮
+                        st.markdown("---")
+                        st.subheader("📥 下载结果")
+                        
+                        filename = f"{selected_platform}_{year}年{month}月结算账单.xlsx"
+                        st.download_button(
+                            label="📥 下载Excel文件",
+                            data=output,
+                            file_name=filename,
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True
+                        )
+                        
+                    except Exception as e:
+                        st.error(f"❌ 处理失败: {str(e)}")
+                        with st.expander("查看详细错误信息"):
+                            st.code(str(e))
+        else:
+            st.warning("⚠️ 无法识别文件类型，请确保上传了正确的结算明细和订单数据文件")
+    elif uploaded_files:
+        st.warning(f"⚠️ 请上传至少2个文件（当前已上传 {len(uploaded_files)} 个）")
 
-else:
-    st.info("👆 请上传数据文件开始处理")
-
-# 页脚
-st.markdown("---")
-st.markdown(
-    f"""
-    <div style='text-align: center; color: gray; font-size: 12px;'>
-    电商数据处理系统 v1.1 | 仅供内部使用 | 当前平台：{selected_platform}
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+if __name__ == "__main__":
+    main()
