@@ -1,0 +1,130 @@
+========================================
+🚀 Streamlit Cloud 部署指南
+========================================
+
+您需要做的事情：
+
+【步骤1】准备 GitHub 仓库
+--------------------------
+1. 登录 GitHub: https://github.com
+2. 创建新仓库:
+   - 点击右上角 "+" → "New repository"
+   - 仓库名称: ecommerce-data-processor (或任意名称)
+   - 可见性: Private (私有，推荐) 或 Public (公开)
+   - 点击 "Create repository"
+
+【步骤2】上传代码到 GitHub
+--------------------------
+方法A - 网页上传 (最简单):
+1. 在新创建的仓库页面，点击 "uploading an existing file"
+2. 将以下4个文件拖拽到页面:
+   ✅ app.py
+   ✅ requirements.txt
+   ✅ README.md
+   ✅ .gitignore
+3. 点击 "Commit changes"
+
+方法B - 使用 Git 命令 (如果熟悉 Git):
+   git init
+   git add .
+   git commit -m "Initial commit"
+   git remote add origin https://github.com/your-username/ecommerce-data-processor.git
+   git branch -M main
+   git push -u origin main
+
+【步骤3】部署到 Streamlit Cloud
+--------------------------
+1. 访问 Streamlit Cloud: https://streamlit.io/cloud
+2. 登录: 使用 GitHub 账号登录
+3. 创建新应用:
+   - 点击 "New app"
+   - Repository: 选择刚才创建的仓库
+   - Branch: main
+   - Main file path: app.py
+   - 点击 "Deploy"
+4. 等待部署: 约2-3分钟
+5. 获取链接: 部署成功后，会显示应用链接
+
+【步骤4】分享给同事
+--------------------------
+复制应用链接，例如: https://your-app-name.streamlit.app
+
+⚠️ 默认密码: ecommerce2025
+
+========================================
+🔐 修改密码 (重要!)
+========================================
+
+为了安全，请修改默认密码:
+
+1. 在 GitHub 仓库中，打开 app.py 文件
+2. 点击编辑按钮 (铅笔图标)
+3. 找到第 22 行:
+   if password == "ecommerce2025":  # 修改这里
+4. 将 "ecommerce2025" 改为您的密码
+5. 点击 "Commit changes"
+6. Streamlit Cloud 会自动重新部署 (约1分钟)
+
+========================================
+📊 使用说明
+========================================
+
+用户操作流程:
+1. 打开应用链接
+2. 输入密码登录
+3. 选择月份: 在侧边栏设置年份和月份
+4. 上传文件:
+   - 小红书结算明细 (.xlsx)
+   - 小红书订单数据 (.xlsx)
+5. 点击 "开始处理数据"
+6. 查看结果并下载 Excel 文件
+
+小红书数据要求:
+- 文件1 (结算明细): 必须包含 结算时间、商品实付/实退、佣金总额、售后单号
+- 文件2 (订单数据): 必须包含 商家编码、商品总价(元)、SKU件数、下单时间
+- 系统会自动识别文件类型，无需按特定顺序上传
+
+========================================
+🔄 后续添加抖音和视频号
+========================================
+
+当抖音和视频号的处理逻辑验证完成后:
+
+1. 修改 app.py:
+   - 找到 PLATFORM_CONFIG
+   - 将对应平台的 enabled 改为 True
+   - 实现对应的处理函数 (搜索 TODO)
+
+2. 更新代码到 GitHub:
+   - 在 GitHub 仓库页面，打开 app.py
+   - 点击编辑按钮
+   - 修改代码
+   - 点击 "Commit changes"
+
+3. 自动部署: Streamlit Cloud 会自动检测更新并重新部署
+
+========================================
+❓ 常见问题
+========================================
+
+Q: 部署失败怎么办?
+A: 检查:
+   1. GitHub 仓库是否包含 app.py 和 requirements.txt
+   2. Streamlit Cloud 是否有权限访问你的 GitHub 仓库
+   3. 查看部署日志中的错误信息
+
+Q: 如何查看部署日志?
+A: 在 Streamlit Cloud 的应用页面，点击右下角的 "Manage app" → "Logs"
+
+Q: 如何更新应用?
+A: 只需在 GitHub 上修改代码，Streamlit Cloud 会自动重新部署
+
+Q: 数据安全吗?
+A: ✅ 上传的文件只在处理时临时存储在内存中
+   ✅ 处理完成后自动清除
+   ✅ 使用 HTTPS 加密传输
+   ✅ 有密码保护
+
+========================================
+祝部署顺利! 🎉
+========================================
